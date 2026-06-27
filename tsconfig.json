@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "outDir": "./dist"
+  },
+  "ts-node": {
+    "transpileOnly": true
+  }
+}
