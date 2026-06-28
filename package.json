@@ -4,9 +4,11 @@
   "main": "api/index.js",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "start": "node api/index.js"
+    "start": "node api/index.js",
+    "embed": "ts-node src/embed.ts"
   },
   "dependencies": {
+    "@pinecone-database/pinecone": "^3.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",
     "express": "^4.18.0"
