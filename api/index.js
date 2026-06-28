@@ -202,3 +202,72 @@ app.get("/api/health", (_, res) => {
 });
 
 module.exports = app;
+
+
+// ── GET /api/embed ────────────────────────────────────────────────────────────
+// Run ONCE to upload products to Pinecone. Hit this URL after deploying.
+// After products are uploaded, this endpoint is no longer needed.
+app.get("/api/embed", async (req, res) => {
+  if (!HF_TOKEN || !PINECONE_API_KEY) {
+    return res.status(500).json({ error: "HF_TOKEN or PINECONE_API_KEY not configured" });
+  }
+
+  try {
+    const index = getPineconeIndex();
+    const vectors = [];
+
+    res.setHeader("Content-Type", "text/plain");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.write("Starting product embedding...\n\n");
+
+    for (const product of products) {
+      const text = `
+Product: ${product.name}
+Collection: ${product.collection}
+Price: PKR ${product.price}
+Description: ${product.description}
+Available Sizes: ${product.sizes.join(", ")}
+Available Colors: ${product.colors.join(", ")}
+Status: ${product.inStock ? "In Stock" : "Out of Stock"}
+${product.badge ? `Badge: ${product.badge}` : ""}
+      `.trim();
+
+      try {
+        const embedding = await embedText(text);
+        vectors.push({
+          id: product.id,
+          values: embedding,
+          metadata: {
+            id: product.id,
+            name: product.name,
+            collection: product.collection,
+            price: product.price,
+            description: product.description,
+            sizes: product.sizes.join(", "),
+            colors: product.colors.join(", "),
+            inStock: product.inStock,
+            badge: product.badge || "",
+          },
+        });
+        res.write(`✅ Embedded: ${product.name}\n`);
+      } catch (err) {
+        res.write(`❌ Failed: ${product.name} — ${err.message}\n`);
+      }
+
+      // Small delay to avoid rate limiting
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    if (vectors.length > 0) {
+      await index.upsert(vectors);
+      res.write(`\n✅ Uploaded ${vectors.length} products to Pinecone!\n`);
+      res.write("RAG is ready. You can now use the chat.\n");
+    } else {
+      res.write("\n❌ No products were embedded. Check your HF_TOKEN.\n");
+    }
+
+    res.end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
