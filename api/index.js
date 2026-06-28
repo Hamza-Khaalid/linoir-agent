@@ -9,7 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_MODEL = "gemma2-9b-it";
+const GROQ_MODEL = "llama3-8b-8192";
 
 // ── Load products ─────────────────────────────────────────────────────────────
 const products = require("../data/products.json").products;
