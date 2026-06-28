@@ -8,12 +8,11 @@ app.use(express.json());
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_MODEL = "llama-3.1-8b-instant";
-const HF_TOKEN = process.env.HF_TOKEN;
+const JINA_API_KEY = process.env.JINA_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "linoir-products";
-const EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
 
-// ── Pinecone client (lazy init) ───────────────────────────────────────────────
+// ── Pinecone client ───────────────────────────────────────────────────────────
 let pineconeIndex = null;
 function getPineconeIndex() {
   if (!pineconeIndex) {
@@ -23,29 +22,57 @@ function getPineconeIndex() {
   return pineconeIndex;
 }
 
-// ── Embed text via Hugging Face ───────────────────────────────────────────────
+// ── Embed text via Jina AI ────────────────────────────────────────────────────
 async function embedText(text) {
-  const response = await fetch(
-    `https://api-inference.huggingface.co/models/${EMBEDDING_MODEL}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${HF_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ inputs: text }),
-    }
-  );
-  if (!response.ok) throw new Error(`HF error: ${await response.text()}`);
+  const response = await fetch("https://api.jina.ai/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${JINA_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "jina-embeddings-v3",
+      input: [text],
+      task: "retrieval.passage",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Jina error: ${await response.text()}`);
+  }
+
   const data = await response.json();
-  return data[0];
+  return data.data[0].embedding;
+}
+
+// ── Embed query (slightly different task type) ────────────────────────────────
+async function embedQuery(text) {
+  const response = await fetch("https://api.jina.ai/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${JINA_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "jina-embeddings-v3",
+      input: [text],
+      task: "retrieval.query",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Jina error: ${await response.text()}`);
+  }
+
+  const data = await response.json();
+  return data.data[0].embedding;
 }
 
 // ── Vector search Pinecone ────────────────────────────────────────────────────
 async function searchProducts(query, topK = 4) {
   try {
     const index = getPineconeIndex();
-    const vector = await embedText(query);
+    const vector = await embedQuery(query);
     const results = await index.query({ vector, topK, includeMetadata: true });
 
     if (!results.matches || results.matches.length === 0) return "";
@@ -58,12 +85,11 @@ async function searchProducts(query, topK = 4) {
     return `RELEVANT PRODUCTS FOR THIS QUERY:\n${lines.join("\n")}`;
   } catch (err) {
     console.error("Vector search error:", err.message);
-    // Fallback to full catalog if vector search fails
     return buildFullProductContext();
   }
 }
 
-// ── Fallback: full product catalog ────────────────────────────────────────────
+// ── Full product catalog fallback ─────────────────────────────────────────────
 const products = require("../data/products.json").products;
 
 function buildFullProductContext(filters = {}) {
@@ -150,7 +176,6 @@ app.post("/api/chat", async (req, res) => {
   if (!GROQ_API_KEY) return res.status(500).json({ error: "GROQ_API_KEY not configured" });
 
   try {
-    // 1 — Order lookup
     const orderMatch = message.match(/LNR[-\s]?\d+/i);
     let orderContext = "";
     if (orderMatch) {
@@ -158,18 +183,17 @@ app.post("/api/chat", async (req, res) => {
       orderContext = `\n\nORDER LOOKUP RESULT FOR ${orderId}:\n${lookupOrder(orderId)}\n\nThis is a Linoir order query. Use the result above to answer directly.`;
     }
 
-    // 2 — Price filter (use full catalog with filter)
     const priceMatch = message.match(/under\s+PKR?\s*([\d,]+)|below\s+PKR?\s*([\d,]+)|less\s+than\s+PKR?\s*([\d,]+)/i);
     let productContext;
 
     if (priceMatch) {
       const maxPrice = parseInt((priceMatch[1] || priceMatch[2] || priceMatch[3]).replace(/,/g, ""));
       productContext = buildFullProductContext({ maxPrice });
-    } else {
-      // 3 — Vector RAG search for everything else
+    } else if (JINA_API_KEY && PINECONE_API_KEY) {
       productContext = await searchProducts(message);
-      // Fallback if vector search returns empty
       if (!productContext) productContext = buildFullProductContext();
+    } else {
+      productContext = buildFullProductContext();
     }
 
     const systemPrompt = buildSystemPrompt(productContext) + orderContext;
@@ -196,20 +220,10 @@ app.post("/api/orders", (req, res) => {
   res.json({ success: true, orderId: order.id });
 });
 
-// ── GET /api/health ───────────────────────────────────────────────────────────
-app.get("/api/health", (_, res) => {
-  res.json({ status: "ok", model: GROQ_MODEL, provider: "groq", rag: "pinecone" });
-});
-
-module.exports = app;
-
-
 // ── GET /api/embed ────────────────────────────────────────────────────────────
-// Run ONCE to upload products to Pinecone. Hit this URL after deploying.
-// After products are uploaded, this endpoint is no longer needed.
 app.get("/api/embed", async (req, res) => {
-  if (!HF_TOKEN || !PINECONE_API_KEY) {
-    return res.status(500).json({ error: "HF_TOKEN or PINECONE_API_KEY not configured" });
+  if (!JINA_API_KEY || !PINECONE_API_KEY) {
+    return res.status(500).json({ error: "JINA_API_KEY or PINECONE_API_KEY not configured" });
   }
 
   try {
@@ -218,19 +232,10 @@ app.get("/api/embed", async (req, res) => {
 
     res.setHeader("Content-Type", "text/plain");
     res.setHeader("Transfer-Encoding", "chunked");
-    res.write("Starting product embedding...\n\n");
+    res.write("Starting product embedding with Jina AI...\n\n");
 
     for (const product of products) {
-      const text = `
-Product: ${product.name}
-Collection: ${product.collection}
-Price: PKR ${product.price}
-Description: ${product.description}
-Available Sizes: ${product.sizes.join(", ")}
-Available Colors: ${product.colors.join(", ")}
-Status: ${product.inStock ? "In Stock" : "Out of Stock"}
-${product.badge ? `Badge: ${product.badge}` : ""}
-      `.trim();
+      const text = `Product: ${product.name}\nCollection: ${product.collection}\nPrice: PKR ${product.price}\nDescription: ${product.description}\nSizes: ${product.sizes.join(", ")}\nColors: ${product.colors.join(", ")}\nStatus: ${product.inStock ? "In Stock" : "Out of Stock"}${product.badge ? `\nBadge: ${product.badge}` : ""}`;
 
       try {
         const embedding = await embedText(text);
@@ -249,21 +254,20 @@ ${product.badge ? `Badge: ${product.badge}` : ""}
             badge: product.badge || "",
           },
         });
-        res.write(`✅ Embedded: ${product.name}\n`);
+        res.write(`✅ ${product.name}\n`);
       } catch (err) {
         res.write(`❌ Failed: ${product.name} — ${err.message}\n`);
       }
 
-      // Small delay to avoid rate limiting
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 200));
     }
 
     if (vectors.length > 0) {
       await index.upsert(vectors);
       res.write(`\n✅ Uploaded ${vectors.length} products to Pinecone!\n`);
-      res.write("RAG is ready. You can now use the chat.\n");
+      res.write("RAG is ready!\n");
     } else {
-      res.write("\n❌ No products were embedded. Check your HF_TOKEN.\n");
+      res.write("\n❌ No products embedded. Check JINA_API_KEY.\n");
     }
 
     res.end();
@@ -271,3 +275,10 @@ ${product.badge ? `Badge: ${product.badge}` : ""}
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── GET /api/health ───────────────────────────────────────────────────────────
+app.get("/api/health", (_, res) => {
+  res.json({ status: "ok", model: GROQ_MODEL, provider: "groq", embeddings: "jina", rag: "pinecone" });
+});
+
+module.exports = app;
