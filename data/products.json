@@ -1,0 +1,203 @@
+{
+  "products": [
+    {
+      "id": "BCH-001",
+      "name": "Borcelle Wave",
+      "collection": "beach",
+      "price": 1499,
+      "description": "A clean minimal beach-inspired tee with subtle wave print. Crafted from 100% premium cotton for all-day comfort.",
+      "sizes": ["S", "M", "L", "XL", "XXL"],
+      "colors": ["White", "Sand", "Navy"],
+      "image": "../assets/images/beach1.png",
+      "badge": "New",
+      "inStock": true
+    },
+    {
+      "id": "BCH-002",
+      "name": "Olivia Shore",
+      "collection": "beach",
+      "price": 1799,
+      "description": "Effortless summer style with a relaxed fit. Features a minimalist coastal graphic on premium soft cotton.",
+      "sizes": ["S", "M", "L", "XL"],
+      "colors": ["White", "Coral", "Teal"],
+      "image": "../assets/images/beach2.png",
+      "badge": "Bestseller",
+      "inStock": true
+    },
+    {
+      "id": "SPT-001",
+      "name": "Pro Sprint",
+      "collection": "sports",
+      "price": 1699,
+      "description": "Performance meets style. Lightweight moisture-wicking fabric with a bold sports graphic.",
+      "sizes": ["S", "M", "L", "XL", "XXL"],
+      "colors": ["Black", "White", "Red"],
+      "image": "../assets/images/sports1.png",
+      "badge": null,
+      "inStock": true
+    },
+    {
+      "id": "SPT-002",
+      "name": "Court Classic",
+      "collection": "sports",
+      "price": 1599,
+      "description": "Inspired by court culture. A versatile sports tee that transitions from gym to street effortlessly.",
+      "sizes": ["M", "L", "XL", "XXL"],
+      "colors": ["White", "Black"],
+      "image": "../assets/images/sports2.png",
+      "badge": null,
+      "inStock": true
+    },
+    {
+      "id": "SPT-003",
+      "name": "Field Edition",
+      "collection": "sports",
+      "price": 1899,
+      "description": "Built for performance with a clean athletic aesthetic. Premium jersey fabric with a modern cut.",
+      "sizes": ["S", "M", "L", "XL"],
+      "colors": ["Olive", "Black", "Navy"],
+      "image": "../assets/images/sports3.png",
+      "badge": "New",
+      "inStock": true
+    },
+    {
+      "id": "GRL-001",
+      "name": "Bloom Edit",
+      "collection": "girls",
+      "price": 1599,
+      "description": "A feminine silhouette with delicate detailing. Lightweight fabric with a flattering relaxed fit.",
+      "sizes": ["XS", "S", "M", "L", "XL"],
+      "colors": ["Pink", "White", "Lilac"],
+      "image": "../assets/images/girls1.png",
+      "badge": "New",
+      "inStock": true
+    },
+    {
+      "id": "GRL-002",
+      "name": "Soft Studio",
+      "collection": "girls",
+      "price": 1499,
+      "description": "Studio-to-street style. A minimal graphic tee with a cropped relaxed fit in super-soft cotton.",
+      "sizes": ["XS", "S", "M", "L"],
+      "colors": ["White", "Beige", "Dusty Rose"],
+      "image": "../assets/images/girls2.png",
+      "badge": null,
+      "inStock": true
+    },
+    {
+      "id": "GRL-003",
+      "name": "Petal Drop",
+      "collection": "girls",
+      "price": 1699,
+      "description": "Delicate floral-inspired design on our signature soft-touch fabric. A wardrobe essential.",
+      "sizes": ["XS", "S", "M", "L", "XL"],
+      "colors": ["White", "Peach"],
+      "image": "../assets/images/girls3.png",
+      "badge": "Bestseller",
+      "inStock": true
+    },
+    {
+      "id": "GRL-004",
+      "name": "Studio Muse",
+      "collection": "girls",
+      "price": 1799,
+      "description": "Artistic and minimal. A clean graphic tee inspired by contemporary art and modern femininity.",
+      "sizes": ["S", "M", "L", "XL"],
+      "colors": ["Black", "White", "Sage"],
+      "image": "../assets/images/girls4.png",
+      "badge": null,
+      "inStock": true
+    },
+    {
+      "id": "GRL-005",
+      "name": "Dusk Edit",
+      "collection": "girls",
+      "price": 1599,
+      "description": "Evening-inspired tones with a minimal graphic. Soft premium cotton in a flattering regular fit.",
+      "sizes": ["XS", "S", "M", "L"],
+      "colors": ["Mauve", "Charcoal", "White"],
+      "image": "../assets/images/girls5.png",
+      "badge": null,
+      "inStock": true
+    },
+    {
+      "id": "GRL-006",
+      "name": "Lune",
+      "collection": "girls",
+      "price": 1899,
+      "description": "French-inspired minimal design. A statement piece that pairs with everything in your wardrobe.",
+      "sizes": ["XS", "S", "M", "L", "XL"],
+      "colors": ["Cream", "Black"],
+      "image": "../assets/images/girls6.png",
+      "badge": "New",
+      "inStock": true
+    },
+    {
+      "id": "QOT-001",
+      "name": "Manifest",
+      "collection": "quotes",
+      "price": 1499,
+      "description": "Words that resonate. A clean typographic tee with an uplifting minimal print on premium cotton.",
+      "sizes": ["S", "M", "L", "XL", "XXL"],
+      "colors": ["White", "Black", "Grey"],
+      "image": "../assets/images/quotes2.png",
+      "badge": "Bestseller",
+      "inStock": true
+    },
+    {
+      "id": "QOT-002",
+      "name": "Still Waters",
+      "collection": "quotes",
+      "price": 1599,
+      "description": "Minimalist typography tee with a calming quote. The kind of tee that starts conversations.",
+      "sizes": ["S", "M", "L", "XL"],
+      "colors": ["White", "Navy", "Sage"],
+      "image": "../assets/images/quotes3.png",
+      "badge": null,
+      "inStock": true
+    },
+    {
+      "id": "CAR-001",
+      "name": "Grid Lines",
+      "collection": "cars",
+      "price": 1799,
+      "description": "Inspired by motorsport culture. A sleek minimal car-line graphic on heavyweight premium cotton.",
+      "sizes": ["S", "M", "L", "XL", "XXL"],
+      "colors": ["Black", "White", "Graphite"],
+      "image": "../assets/images/cars1.png",
+      "badge": "New",
+      "inStock": true
+    },
+    {
+      "id": "CAR-002",
+      "name": "Apex",
+      "collection": "cars",
+      "price": 1999,
+      "description": "For those who appreciate precision. A bold automotive graphic tee with a modern racing aesthetic.",
+      "sizes": ["M", "L", "XL", "XXL"],
+      "colors": ["Black", "Red"],
+      "image": "../assets/images/cars2.png",
+      "badge": "Bestseller",
+      "inStock": true
+    },
+    {
+      "id": "CAR-003",
+      "name": "Torque",
+      "collection": "cars",
+      "price": 1899,
+      "description": "Raw power meets minimal design. A clean automotive-inspired graphic on ultra-soft cotton.",
+      "sizes": ["S", "M", "L", "XL", "XXL"],
+      "colors": ["Charcoal", "White"],
+      "image": "../assets/images/cars3.png",
+      "badge": null,
+      "inStock": true
+    }
+  ],
+  "collections": [
+    { "id": "beach", "name": "Beach", "description": "Coastal-inspired designs for sun and surf.", "image": "https://images.unsplash.com/photo-1652794121113-1a2a9563daaf?q=80&w=800&auto=format&fit=crop" },
+    { "id": "sports", "name": "Sports", "description": "Performance style for the court and the street.", "image": "https://images.unsplash.com/photo-1579952363873-27f3bade9f55?w=800&auto=format&fit=crop" },
+    { "id": "girls", "name": "Girls", "description": "Feminine minimal designs for everyday wear.", "image": "https://images.unsplash.com/photo-1727204898451-2912cdcc208f?w=800&auto=format&fit=crop" },
+    { "id": "quotes", "name": "Quotes", "description": "Words that move you, worn close to the heart.", "image": "https://images.unsplash.com/photo-1583485088034-697b5bc54ccd?w=800&auto=format&fit=crop" },
+    { "id": "cars", "name": "Cars", "description": "Motorsport culture meets minimal streetwear.", "image": "https://images.unsplash.com/photo-1597541772067-0d899dcdf2af?w=800&auto=format&fit=crop" }
+  ]
+}
