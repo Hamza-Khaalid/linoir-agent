@@ -180,8 +180,13 @@ app.post("/api/chat", async (req, res) => {
     let orderContext = "";
     if (orderMatch) {
       const orderId = orderMatch[0].replace(/\s/, "-").toUpperCase();
-      orderContext = `\n\nORDER LOOKUP RESULT FOR ${orderId}:\n${lookupOrder(orderId)}\n\nThis is a Linoir order query. Use the result above to answer directly.`;
-    }
+      const orderResult = lookupOrder(orderId);
+      const orderNotFound = orderResult.includes("No order found");
+
+      orderContext = orderNotFound
+      ? `\n\nORDER LOOKUP: The customer provided order ID ${orderId}. This order does NOT exist in our system. You must respond with EXACTLY this message and nothing else: "I wasn't able to find an order with that ID. Please double-check your order number — it should look like LNR- followed by 6 digits. If you believe this is correct, please contact us at support@linoir.pk"`
+      : `\n\nORDER LOOKUP RESULT FOR ${orderId}:\n${orderResult}\n\nThis is a Linoir order query. Use the result above to answer directly.`;
+      }
 
     const priceMatch = message.match(/under\s+PKR?\s*([\d,]+)|below\s+PKR?\s*([\d,]+)|less\s+than\s+PKR?\s*([\d,]+)/i);
     let productContext;
