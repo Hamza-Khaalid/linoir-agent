@@ -19,8 +19,11 @@ let mongoClient = null;
 let db = null;
 
 async function getDB() {
-  if (!mongoClient) {
-    mongoClient = new MongoClient(MONGODB_URI);
+  if (!mongoClient || !mongoClient.topology?.isConnected()) {
+    mongoClient = new MongoClient(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 10000,
+    });
     await mongoClient.connect();
     db = mongoClient.db("linoir");
   }
@@ -109,6 +112,7 @@ function buildFullProductContext(filters = {}) {
 // ── Orders — MongoDB ──────────────────────────────────────────────────────────
 async function saveOrder(order) {
   const database = await getDB();
+  if (!database) throw new Error("Database connection failed");
   const collection = database.collection("orders");
   await collection.updateOne(
     { id: order.id },
