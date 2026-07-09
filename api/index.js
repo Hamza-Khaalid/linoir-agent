@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { Pinecone } = require("@pinecone-database/pinecone");
+const { MongoClient } = require("mongodb");
 
 const app = express();
 app.use(cors());
@@ -11,6 +12,20 @@ const GROQ_MODEL = "llama-3.1-8b-instant";
 const JINA_API_KEY = process.env.JINA_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "linoir-products";
+const MONGODB_URI = process.env.MONGODB_URI;
+
+// ── MongoDB client (lazy init) ────────────────────────────────────────────────
+let mongoClient = null;
+let db = null;
+
+async function getDB() {
+  if (!mongoClient) {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    db = mongoClient.db("linoir");
+  }
+  return db;
+}
 
 // ── Pinecone client ───────────────────────────────────────────────────────────
 let pineconeIndex = null;
@@ -36,16 +51,11 @@ async function embedText(text) {
       task: "retrieval.passage",
     }),
   });
-
-  if (!response.ok) {
-    throw new Error(`Jina error: ${await response.text()}`);
-  }
-
+  if (!response.ok) throw new Error(`Jina error: ${await response.text()}`);
   const data = await response.json();
   return data.data[0].embedding;
 }
 
-// ── Embed query (slightly different task type) ────────────────────────────────
 async function embedQuery(text) {
   const response = await fetch("https://api.jina.ai/v1/embeddings", {
     method: "POST",
@@ -59,11 +69,7 @@ async function embedQuery(text) {
       task: "retrieval.query",
     }),
   });
-
-  if (!response.ok) {
-    throw new Error(`Jina error: ${await response.text()}`);
-  }
-
+  if (!response.ok) throw new Error(`Jina error: ${await response.text()}`);
   const data = await response.json();
   return data.data[0].embedding;
 }
@@ -74,14 +80,11 @@ async function searchProducts(query, topK = 4) {
     const index = getPineconeIndex();
     const vector = await embedQuery(query);
     const results = await index.query({ vector, topK, includeMetadata: true });
-
     if (!results.matches || results.matches.length === 0) return "";
-
     const lines = results.matches.map(m => {
       const d = m.metadata;
       return `- ${d.name} (${d.collection}) | PKR ${Number(d.price).toLocaleString()} | Sizes: ${d.sizes} | Colors: ${d.colors} | ${d.inStock ? "In Stock" : "Out of Stock"}${d.badge ? ` | ${d.badge}` : ""}`;
     });
-
     return `RELEVANT PRODUCTS FOR THIS QUERY:\n${lines.join("\n")}`;
   } catch (err) {
     console.error("Vector search error:", err.message);
@@ -99,25 +102,51 @@ function buildFullProductContext(filters = {}) {
   const lines = filtered.map(p =>
     `- ${p.name} (${p.collection}) | PKR ${p.price.toLocaleString()} | Sizes: ${p.sizes.join(", ")} | Colors: ${p.colors.join(", ")} | ${p.inStock ? "In Stock" : "Out of Stock"}${p.badge ? ` | ${p.badge}` : ""}`
   );
-  const label = filters.maxPrice ? ` — strictly under PKR ${filters.maxPrice.toLocaleString()}` : "";
+  const label = filters.maxPrice ? ` strictly under PKR ${filters.maxPrice.toLocaleString()}` : "";
   return `LINOIR PRODUCT CATALOG${label} (${filtered.length} products):\n${lines.join("\n")}${filters.maxPrice ? "\n\nIMPORTANT: Only list the products shown above." : ""}`;
 }
 
-// ── Orders (in-memory) ────────────────────────────────────────────────────────
-const orders = {};
+// ── Orders — MongoDB ──────────────────────────────────────────────────────────
+async function saveOrder(order) {
+  const database = await getDB();
+  const collection = database.collection("orders");
+  await collection.updateOne(
+    { id: order.id },
+    { $set: { ...order, status: "Confirmed", savedAt: new Date() } },
+    { upsert: true }
+  );
+}
 
-function lookupOrder(orderId) {
-  const order = orders[orderId.toUpperCase()];
-  if (!order) return `No order found with ID "${orderId}". Please double-check your order number — it starts with LNR- followed by 6 digits.`;
-  const statusMap = {
-    Confirmed: "✓ Confirmed — your order has been received.",
-    Processing: "⚙ Processing — we are preparing your items.",
-    Shipped: "🚚 Shipped — your order is on the way.",
-    Delivered: "✅ Delivered — your order has arrived.",
-    Cancelled: "✗ Cancelled.",
-  };
-  const itemList = order.items?.map(i => `${i.name} (${i.size}, ${i.color}) x${i.qty}`).join(", ") || "N/A";
-  return `Order ${order.id}:\n- Status: ${statusMap[order.status] || order.status}\n- Date: ${order.date}\n- Items: ${itemList}\n- Total: PKR ${order.total?.toLocaleString()}\n- Shipping to: ${order.customer?.address}\n- Estimated delivery: 3–5 business days`;
+async function lookupOrder(orderId) {
+  try {
+    const database = await getDB();
+    const collection = database.collection("orders");
+    const order = await collection.findOne({ id: orderId.toUpperCase() });
+
+    if (!order) return null;
+
+    const statusMap = {
+      Confirmed: "Confirmed — your order has been received.",
+      Processing: "Processing — we are preparing your items.",
+      Shipped: "Shipped — your order is on the way.",
+      Delivered: "Delivered — your order has arrived.",
+      Cancelled: "Cancelled.",
+    };
+
+    const itemList = order.items?.map(i => `${i.name} (${i.size}, ${i.color}) x${i.qty}`).join(", ") || "N/A";
+
+    return `Order ${order.id}:
+- Status: ${statusMap[order.status] || order.status}
+- Date: ${order.date}
+- Items: ${itemList}
+- Total: PKR ${order.total?.toLocaleString()}
+- Shipping to: ${order.customer?.address}
+- Estimated delivery: 3-5 business days`;
+
+  } catch (err) {
+    console.error("Order lookup error:", err.message);
+    return null;
+  }
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -142,11 +171,11 @@ STRICT RULES:
 LINOIR POLICIES:
 Website: https://linoir.vercel.app
 Collections (5 total): Beach, Sports, Girls, Quotes, Cars
-Shipping: PKR 200 standard (free above PKR 3,000) | 3–5 business days | All Pakistan
-Returns: 7-day policy | Unworn, unwashed, tags attached | support@linoir.pk | Refund in 3–5 days
+Shipping: PKR 200 standard (free above PKR 3,000) | 3-5 business days | All Pakistan
+Returns: 7-day policy | Unworn, unwashed, tags attached | support@linoir.pk | Refund in 3-5 days
 Promo Codes: LINOIR10 (10% off) | WELCOME20 (20% off new customers)
 Payment: Cash on Delivery | Credit/Debit Card | EasyPaisa/JazzCash
-Contact: support@linoir.pk | @linoir.pk | Mon–Sat 10am–6pm PKT
+Contact: support@linoir.pk | @linoir.pk | Mon-Sat 10am-6pm PKT
 
 ${productContext}
 
@@ -178,15 +207,17 @@ app.post("/api/chat", async (req, res) => {
   try {
     const orderMatch = message.match(/LNR[-\s]?\d+/i);
     let orderContext = "";
+
     if (orderMatch) {
       const orderId = orderMatch[0].replace(/\s/, "-").toUpperCase();
-      const orderResult = lookupOrder(orderId);
-      const orderNotFound = orderResult.includes("No order found");
+      const orderResult = await lookupOrder(orderId);
 
-      orderContext = orderNotFound
-      ? `\n\nORDER LOOKUP: The customer provided order ID ${orderId}. This order does NOT exist in our system. You must respond with EXACTLY this message and nothing else: "I wasn't able to find an order with that ID. Please double-check your order number — it should look like LNR- followed by 6 digits. If you believe this is correct, please contact us at support@linoir.pk"`
-      : `\n\nORDER LOOKUP RESULT FOR ${orderId}:\n${orderResult}\n\nThis is a Linoir order query. Use the result above to answer directly.`;
+      if (orderResult) {
+        orderContext = `\n\nORDER LOOKUP RESULT FOR ${orderId}:\n${orderResult}\n\nThis is a Linoir order query. Use the result above to answer directly.`;
+      } else {
+        orderContext = `\n\nORDER LOOKUP: The customer provided order ID ${orderId}. This order does NOT exist in our system. You must respond with EXACTLY this message and nothing else: "I wasn't able to find an order with that ID. Please double-check your order number — it should look like LNR- followed by 6 digits. If you believe this is correct, please contact us at support@linoir.pk"`;
       }
+    }
 
     const priceMatch = message.match(/under\s+PKR?\s*([\d,]+)|below\s+PKR?\s*([\d,]+)|less\s+than\s+PKR?\s*([\d,]+)/i);
     let productContext;
@@ -218,11 +249,26 @@ app.post("/api/chat", async (req, res) => {
 });
 
 // ── POST /api/orders ──────────────────────────────────────────────────────────
-app.post("/api/orders", (req, res) => {
+app.post("/api/orders", async (req, res) => {
   const order = req.body;
   if (!order || !order.id) return res.status(400).json({ error: "Invalid order data" });
-  orders[order.id.toUpperCase()] = { ...order, status: "Confirmed" };
-  res.json({ success: true, orderId: order.id });
+  try {
+    await saveOrder(order);
+    res.json({ success: true, orderId: order.id });
+  } catch (err) {
+    console.error("Save order error:", err.message);
+    res.status(500).json({ error: "Could not save order" });
+  }
+});
+
+// ── GET /api/health ───────────────────────────────────────────────────────────
+app.get("/api/health", async (_, res) => {
+  let mongoStatus = "disconnected";
+  try {
+    await getDB();
+    mongoStatus = "connected";
+  } catch {}
+  res.json({ status: "ok", model: GROQ_MODEL, provider: "groq", embeddings: "jina", rag: "pinecone", database: mongoStatus });
 });
 
 // ── GET /api/embed ────────────────────────────────────────────────────────────
@@ -279,11 +325,6 @@ app.get("/api/embed", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// ── GET /api/health ───────────────────────────────────────────────────────────
-app.get("/api/health", (_, res) => {
-  res.json({ status: "ok", model: GROQ_MODEL, provider: "groq", embeddings: "jina", rag: "pinecone" });
 });
 
 module.exports = app;
