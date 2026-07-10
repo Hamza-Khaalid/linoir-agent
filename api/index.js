@@ -14,13 +14,12 @@ const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "linoir-products";
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// ── MongoDB client ────────────────────────────────────────────────────────────
+// ── MongoDB ───────────────────────────────────────────────────────────────────
 let cachedClient = null;
 
 async function getDB() {
   if (cachedClient) {
     try {
-      // ping to verify connection is still alive
       await cachedClient.db("admin").command({ ping: 1 });
       return cachedClient.db("linoir");
     } catch {
@@ -28,15 +27,55 @@ async function getDB() {
     }
   }
   const client = new MongoClient(MONGODB_URI, {
-    serverSelectionTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 10000,
     connectTimeoutMS: 10000,
+    tls: true,
+    tlsAllowInvalidCertificates: false,
+    tlsAllowInvalidHostnames: false,
   });
   await client.connect();
   cachedClient = client;
   return client.db("linoir");
 }
 
-// ── Pinecone client ───────────────────────────────────────────────────────────
+async function saveOrder(order) {
+  const db = await getDB();
+  await db.collection("orders").updateOne(
+    { id: order.id },
+    { $set: { ...order, status: "Confirmed", savedAt: new Date() } },
+    { upsert: true }
+  );
+}
+
+async function lookupOrder(orderId) {
+  try {
+    const db = await getDB();
+    const order = await db.collection("orders").findOne({ id: orderId.toUpperCase() });
+    if (!order) return null;
+
+    const statusMap = {
+      Confirmed: "Confirmed - your order has been received.",
+      Processing: "Processing - we are preparing your items.",
+      Shipped: "Shipped - your order is on the way.",
+      Delivered: "Delivered - your order has arrived.",
+      Cancelled: "Cancelled.",
+    };
+
+    const itemList = order.items?.map(i => `${i.name} (${i.size}, ${i.color}) x${i.qty}`).join(", ") || "N/A";
+    return `Order ${order.id}:
+- Status: ${statusMap[order.status] || order.status}
+- Date: ${order.date}
+- Items: ${itemList}
+- Total: PKR ${order.total?.toLocaleString()}
+- Shipping to: ${order.customer?.address}
+- Estimated delivery: 3-5 business days`;
+  } catch (err) {
+    console.error("Order lookup error:", err.message);
+    return null;
+  }
+}
+
+// ── Pinecone ──────────────────────────────────────────────────────────────────
 let pineconeIndex = null;
 function getPineconeIndex() {
   if (!pineconeIndex) {
@@ -97,47 +136,6 @@ function buildFullProductContext(filters = {}) {
   );
   const label = filters.maxPrice ? ` strictly under PKR ${filters.maxPrice.toLocaleString()}` : "";
   return `LINOIR PRODUCT CATALOG${label} (${filtered.length} products):\n${lines.join("\n")}${filters.maxPrice ? "\n\nIMPORTANT: Only list the products shown above." : ""}`;
-}
-
-// ── Orders ────────────────────────────────────────────────────────────────────
-async function saveOrder(order) {
-  const db = await getDB();
-  const collection = db.collection("orders");
-  await collection.updateOne(
-    { id: order.id },
-    { $set: { ...order, status: "Confirmed", savedAt: new Date() } },
-    { upsert: true }
-  );
-}
-
-async function lookupOrder(orderId) {
-  try {
-    const db = await getDB();
-    const collection = db.collection("orders");
-    const order = await collection.findOne({ id: orderId.toUpperCase() });
-    if (!order) return null;
-
-    const statusMap = {
-      Confirmed: "Confirmed - your order has been received.",
-      Processing: "Processing - we are preparing your items.",
-      Shipped: "Shipped - your order is on the way.",
-      Delivered: "Delivered - your order has arrived.",
-      Cancelled: "Cancelled.",
-    };
-
-    const itemList = order.items?.map(i => `${i.name} (${i.size}, ${i.color}) x${i.qty}`).join(", ") || "N/A";
-
-    return `Order ${order.id}:
-- Status: ${statusMap[order.status] || order.status}
-- Date: ${order.date}
-- Items: ${itemList}
-- Total: PKR ${order.total?.toLocaleString()}
-- Shipping to: ${order.customer?.address}
-- Estimated delivery: 3-5 business days`;
-  } catch (err) {
-    console.error("Order lookup error:", err.message);
-    return null;
-  }
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -235,49 +233,15 @@ app.post("/api/chat", async (req, res) => {
 });
 
 // ── POST /api/orders ──────────────────────────────────────────────────────────
-// app.post("/api/orders", async (req, res) => {
-//   const order = req.body;
-//   if (!order || !order.id) return res.status(400).json({ error: "Invalid order data" });
-//   try {
-//     await saveOrder(order);
-//     console.log("Order saved successfully:", order.id);
-//     res.json({ success: true, orderId: order.id });
-//   } catch (err) {
-//     console.error("Save order error:", err.message);
-//     res.status(500).json({ error: "Could not save order" });
-//   }
-// });
-
 app.post("/api/orders", async (req, res) => {
   const order = req.body;
   if (!order || !order.id) return res.status(400).json({ error: "Invalid order data" });
-  
   try {
-    console.log("MONGODB_URI exists:", !!MONGODB_URI);
-    console.log("Connecting to MongoDB...");
-    
-    const client = new MongoClient(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-    });
-    
-    await client.connect();
-    console.log("Connected!");
-    
-    const db = client.db("linoir");
-    const collection = db.collection("orders");
-    
-    await collection.updateOne(
-      { id: order.id },
-      { $set: { ...order, status: "Confirmed", savedAt: new Date() } },
-      { upsert: true }
-    );
-    
-    await client.close();
+    await saveOrder(order);
     console.log("Order saved:", order.id);
     res.json({ success: true, orderId: order.id });
-    
   } catch (err) {
-    console.error("FULL ERROR:", err);
+    console.error("Save order error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
