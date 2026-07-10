@@ -14,20 +14,26 @@ const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "linoir-products";
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// ── MongoDB client (lazy init) ────────────────────────────────────────────────
-let mongoClient = null;
-let db = null;
+// ── MongoDB client ────────────────────────────────────────────────────────────
+let cachedClient = null;
 
 async function getDB() {
-  if (!mongoClient || !mongoClient.topology?.isConnected()) {
-    mongoClient = new MongoClient(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 10000,
-    });
-    await mongoClient.connect();
-    db = mongoClient.db("linoir");
+  if (cachedClient) {
+    try {
+      // ping to verify connection is still alive
+      await cachedClient.db("admin").command({ ping: 1 });
+      return cachedClient.db("linoir");
+    } catch {
+      cachedClient = null;
+    }
   }
-  return db;
+  const client = new MongoClient(MONGODB_URI, {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 10000,
+  });
+  await client.connect();
+  cachedClient = client;
+  return client.db("linoir");
 }
 
 // ── Pinecone client ───────────────────────────────────────────────────────────
@@ -40,44 +46,28 @@ function getPineconeIndex() {
   return pineconeIndex;
 }
 
-// ── Embed text via Jina AI ────────────────────────────────────────────────────
+// ── Jina embeddings ───────────────────────────────────────────────────────────
 async function embedText(text) {
   const response = await fetch("https://api.jina.ai/v1/embeddings", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${JINA_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "jina-embeddings-v3",
-      input: [text],
-      task: "retrieval.passage",
-    }),
+    headers: { "Authorization": `Bearer ${JINA_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "jina-embeddings-v3", input: [text], task: "retrieval.passage" }),
   });
   if (!response.ok) throw new Error(`Jina error: ${await response.text()}`);
-  const data = await response.json();
-  return data.data[0].embedding;
+  return (await response.json()).data[0].embedding;
 }
 
 async function embedQuery(text) {
   const response = await fetch("https://api.jina.ai/v1/embeddings", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${JINA_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "jina-embeddings-v3",
-      input: [text],
-      task: "retrieval.query",
-    }),
+    headers: { "Authorization": `Bearer ${JINA_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "jina-embeddings-v3", input: [text], task: "retrieval.query" }),
   });
   if (!response.ok) throw new Error(`Jina error: ${await response.text()}`);
-  const data = await response.json();
-  return data.data[0].embedding;
+  return (await response.json()).data[0].embedding;
 }
 
-// ── Vector search Pinecone ────────────────────────────────────────────────────
+// ── Vector search ─────────────────────────────────────────────────────────────
 async function searchProducts(query, topK = 4) {
   try {
     const index = getPineconeIndex();
@@ -95,7 +85,7 @@ async function searchProducts(query, topK = 4) {
   }
 }
 
-// ── Full product catalog fallback ─────────────────────────────────────────────
+// ── Product catalog ───────────────────────────────────────────────────────────
 const products = require("../data/products.json").products;
 
 function buildFullProductContext(filters = {}) {
@@ -109,11 +99,10 @@ function buildFullProductContext(filters = {}) {
   return `LINOIR PRODUCT CATALOG${label} (${filtered.length} products):\n${lines.join("\n")}${filters.maxPrice ? "\n\nIMPORTANT: Only list the products shown above." : ""}`;
 }
 
-// ── Orders — MongoDB ──────────────────────────────────────────────────────────
+// ── Orders ────────────────────────────────────────────────────────────────────
 async function saveOrder(order) {
-  const database = await getDB();
-  if (!database) throw new Error("Database connection failed");
-  const collection = database.collection("orders");
+  const db = await getDB();
+  const collection = db.collection("orders");
   await collection.updateOne(
     { id: order.id },
     { $set: { ...order, status: "Confirmed", savedAt: new Date() } },
@@ -123,17 +112,16 @@ async function saveOrder(order) {
 
 async function lookupOrder(orderId) {
   try {
-    const database = await getDB();
-    const collection = database.collection("orders");
+    const db = await getDB();
+    const collection = db.collection("orders");
     const order = await collection.findOne({ id: orderId.toUpperCase() });
-
     if (!order) return null;
 
     const statusMap = {
-      Confirmed: "Confirmed — your order has been received.",
-      Processing: "Processing — we are preparing your items.",
-      Shipped: "Shipped — your order is on the way.",
-      Delivered: "Delivered — your order has arrived.",
+      Confirmed: "Confirmed - your order has been received.",
+      Processing: "Processing - we are preparing your items.",
+      Shipped: "Shipped - your order is on the way.",
+      Delivered: "Delivered - your order has arrived.",
       Cancelled: "Cancelled.",
     };
 
@@ -146,7 +134,6 @@ async function lookupOrder(orderId) {
 - Total: PKR ${order.total?.toLocaleString()}
 - Shipping to: ${order.customer?.address}
 - Estimated delivery: 3-5 business days`;
-
   } catch (err) {
     console.error("Order lookup error:", err.message);
     return null;
@@ -156,11 +143,11 @@ async function lookupOrder(orderId) {
 // ── System prompt ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(productContext) {
   return `
-You are Aria, the official customer support assistant for Linoir — a premium minimal t-shirt brand based in Pakistan.
+You are Aria, the official customer support assistant for Linoir - a premium minimal t-shirt brand based in Pakistan.
 
 YOUR IDENTITY:
 - Warm, helpful, and professional
-- Speak concisely — no long paragraphs
+- Speak concisely - no long paragraphs
 - Represent Linoir at all times
 
 STRICT RULES:
@@ -170,7 +157,7 @@ STRICT RULES:
 3. NEVER reveal another customer's order details.
 4. NEVER make up products, prices, or policies not listed below.
 5. NEVER list products outside a price filter.
-6. If you don't know something, say: "I'll need to check on that — please contact us at support@linoir.pk"
+6. If you don't know something, say: "I'll need to check on that - please contact us at support@linoir.pk"
 
 LINOIR POLICIES:
 Website: https://linoir.vercel.app
@@ -187,19 +174,15 @@ Keep responses short, helpful, and conversational.
   `.trim();
 }
 
-// ── Groq API ──────────────────────────────────────────────────────────────────
+// ── Groq ──────────────────────────────────────────────────────────────────────
 async function callGroq(messages) {
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${GROQ_API_KEY}`,
-    },
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
     body: JSON.stringify({ model: GROQ_MODEL, messages, max_tokens: 1024, temperature: 0.3 }),
   });
   if (!response.ok) throw new Error(`Groq error: ${await response.text()}`);
-  const data = await response.json();
-  return data.choices[0].message.content.trim();
+  return (await response.json()).choices[0].message.content.trim();
 }
 
 // ── POST /api/chat ────────────────────────────────────────────────────────────
@@ -215,11 +198,10 @@ app.post("/api/chat", async (req, res) => {
     if (orderMatch) {
       const orderId = orderMatch[0].replace(/\s/, "-").toUpperCase();
       const orderResult = await lookupOrder(orderId);
-
       if (orderResult) {
         orderContext = `\n\nORDER LOOKUP RESULT FOR ${orderId}:\n${orderResult}\n\nThis is a Linoir order query. Use the result above to answer directly.`;
       } else {
-        orderContext = `\n\nORDER LOOKUP: The customer provided order ID ${orderId}. This order does NOT exist in our system. You must respond with EXACTLY this message and nothing else: "I wasn't able to find an order with that ID. Please double-check your order number — it should look like LNR- followed by 6 digits. If you believe this is correct, please contact us at support@linoir.pk"`;
+        orderContext = `\n\nORDER LOOKUP: The customer provided order ID ${orderId}. This order does NOT exist in our system. You must respond with EXACTLY this message and nothing else: "I wasn't able to find an order with that ID. Please double-check your order number - it should look like LNR- followed by 6 digits. If you believe this is correct, please contact us at support@linoir.pk"`;
       }
     }
 
@@ -258,6 +240,7 @@ app.post("/api/orders", async (req, res) => {
   if (!order || !order.id) return res.status(400).json({ error: "Invalid order data" });
   try {
     await saveOrder(order);
+    console.log("Order saved successfully:", order.id);
     res.json({ success: true, orderId: order.id });
   } catch (err) {
     console.error("Save order error:", err.message);
@@ -271,7 +254,9 @@ app.get("/api/health", async (_, res) => {
   try {
     await getDB();
     mongoStatus = "connected";
-  } catch {}
+  } catch (err) {
+    console.error("Health check DB error:", err.message);
+  }
   res.json({ status: "ok", model: GROQ_MODEL, provider: "groq", embeddings: "jina", rag: "pinecone", database: mongoStatus });
 });
 
@@ -280,51 +265,35 @@ app.get("/api/embed", async (req, res) => {
   if (!JINA_API_KEY || !PINECONE_API_KEY) {
     return res.status(500).json({ error: "JINA_API_KEY or PINECONE_API_KEY not configured" });
   }
-
   try {
     const index = getPineconeIndex();
     const vectors = [];
-
     res.setHeader("Content-Type", "text/plain");
     res.setHeader("Transfer-Encoding", "chunked");
     res.write("Starting product embedding with Jina AI...\n\n");
 
     for (const product of products) {
       const text = `Product: ${product.name}\nCollection: ${product.collection}\nPrice: PKR ${product.price}\nDescription: ${product.description}\nSizes: ${product.sizes.join(", ")}\nColors: ${product.colors.join(", ")}\nStatus: ${product.inStock ? "In Stock" : "Out of Stock"}${product.badge ? `\nBadge: ${product.badge}` : ""}`;
-
       try {
         const embedding = await embedText(text);
         vectors.push({
           id: product.id,
           values: embedding,
-          metadata: {
-            id: product.id,
-            name: product.name,
-            collection: product.collection,
-            price: product.price,
-            description: product.description,
-            sizes: product.sizes.join(", "),
-            colors: product.colors.join(", "),
-            inStock: product.inStock,
-            badge: product.badge || "",
-          },
+          metadata: { id: product.id, name: product.name, collection: product.collection, price: product.price, description: product.description, sizes: product.sizes.join(", "), colors: product.colors.join(", "), inStock: product.inStock, badge: product.badge || "" },
         });
         res.write(`✅ ${product.name}\n`);
       } catch (err) {
-        res.write(`❌ Failed: ${product.name} — ${err.message}\n`);
+        res.write(`❌ Failed: ${product.name} - ${err.message}\n`);
       }
-
       await new Promise(r => setTimeout(r, 200));
     }
 
     if (vectors.length > 0) {
       await index.upsert(vectors);
-      res.write(`\n✅ Uploaded ${vectors.length} products to Pinecone!\n`);
-      res.write("RAG is ready!\n");
+      res.write(`\n✅ Uploaded ${vectors.length} products to Pinecone!\nRAG is ready!\n`);
     } else {
-      res.write("\n❌ No products embedded. Check JINA_API_KEY.\n");
+      res.write("\n❌ No products embedded.\n");
     }
-
     res.end();
   } catch (err) {
     res.status(500).json({ error: err.message });
