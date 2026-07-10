@@ -235,16 +235,50 @@ app.post("/api/chat", async (req, res) => {
 });
 
 // ── POST /api/orders ──────────────────────────────────────────────────────────
+// app.post("/api/orders", async (req, res) => {
+//   const order = req.body;
+//   if (!order || !order.id) return res.status(400).json({ error: "Invalid order data" });
+//   try {
+//     await saveOrder(order);
+//     console.log("Order saved successfully:", order.id);
+//     res.json({ success: true, orderId: order.id });
+//   } catch (err) {
+//     console.error("Save order error:", err.message);
+//     res.status(500).json({ error: "Could not save order" });
+//   }
+// });
+
 app.post("/api/orders", async (req, res) => {
   const order = req.body;
   if (!order || !order.id) return res.status(400).json({ error: "Invalid order data" });
+  
   try {
-    await saveOrder(order);
-    console.log("Order saved successfully:", order.id);
+    console.log("MONGODB_URI exists:", !!MONGODB_URI);
+    console.log("Connecting to MongoDB...");
+    
+    const client = new MongoClient(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    });
+    
+    await client.connect();
+    console.log("Connected!");
+    
+    const db = client.db("linoir");
+    const collection = db.collection("orders");
+    
+    await collection.updateOne(
+      { id: order.id },
+      { $set: { ...order, status: "Confirmed", savedAt: new Date() } },
+      { upsert: true }
+    );
+    
+    await client.close();
+    console.log("Order saved:", order.id);
     res.json({ success: true, orderId: order.id });
+    
   } catch (err) {
-    console.error("Save order error:", err.message);
-    res.status(500).json({ error: "Could not save order" });
+    console.error("FULL ERROR:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
