@@ -13,6 +13,7 @@ const JINA_API_KEY = process.env.JINA_API_KEY;
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_INDEX = process.env.PINECONE_INDEX || "linoir-products";
 const MONGODB_URI = process.env.MONGODB_URI;
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
 
 // ── MongoDB ───────────────────────────────────────────────────────────────────
 let cachedClient = null;
@@ -52,7 +53,6 @@ async function lookupOrder(orderId) {
     const db = await getDB();
     const order = await db.collection("orders").findOne({ id: orderId.toUpperCase() });
     if (!order) return null;
-
     const statusMap = {
       Confirmed: "Confirmed - your order has been received.",
       Processing: "Processing - we are preparing your items.",
@@ -60,7 +60,6 @@ async function lookupOrder(orderId) {
       Delivered: "Delivered - your order has arrived.",
       Cancelled: "Cancelled.",
     };
-
     const itemList = order.items?.map(i => `${i.name} (${i.size}, ${i.color}) x${i.qty}`).join(", ") || "N/A";
     return `Order ${order.id}:
 - Status: ${statusMap[order.status] || order.status}
@@ -106,6 +105,36 @@ async function embedQuery(text) {
   return (await response.json()).data[0].embedding;
 }
 
+// ── Embed a single product to Pinecone ────────────────────────────────────────
+async function embedProduct(product) {
+  const text = `Product: ${product.name}
+Collection: ${product.collection}
+Price: PKR ${product.price}
+Description: ${product.description}
+Sizes: ${product.sizes.join(", ")}
+Colors: ${product.colors.join(", ")}
+Status: ${product.inStock ? "In Stock" : "Out of Stock"}${product.badge ? `\nBadge: ${product.badge}` : ""}`;
+
+  const embedding = await embedText(text);
+  const index = getPineconeIndex();
+
+  await index.upsert([{
+    id: product.id,
+    values: embedding,
+    metadata: {
+      id: product.id,
+      name: product.name,
+      collection: product.collection,
+      price: product.price,
+      description: product.description,
+      sizes: Array.isArray(product.sizes) ? product.sizes.join(", ") : product.sizes,
+      colors: Array.isArray(product.colors) ? product.colors.join(", ") : product.colors,
+      inStock: product.inStock,
+      badge: product.badge || "",
+    },
+  }]);
+}
+
 // ── Vector search ─────────────────────────────────────────────────────────────
 async function searchProducts(query, topK = 4) {
   try {
@@ -124,18 +153,32 @@ async function searchProducts(query, topK = 4) {
   }
 }
 
-// ── Product catalog ───────────────────────────────────────────────────────────
-const products = require("../data/products.json").products;
+// ── Product catalog fallback ──────────────────────────────────────────────────
+const seedProducts = require("../data/products.json").products;
 
-function buildFullProductContext(filters = {}) {
+async function getProductsFromDB() {
+  try {
+    const db = await getDB();
+    const products = await db.collection("products").find({}).toArray();
+    return products.length > 0 ? products : seedProducts;
+  } catch {
+    return seedProducts;
+  }
+}
+
+function buildContextFromProducts(products, filters = {}) {
   let filtered = [...products];
   if (filters.maxPrice) filtered = filtered.filter(p => p.price < filters.maxPrice);
   if (filtered.length === 0) return "No products match the requested criteria.";
   const lines = filtered.map(p =>
-    `- ${p.name} (${p.collection}) | PKR ${p.price.toLocaleString()} | Sizes: ${p.sizes.join(", ")} | Colors: ${p.colors.join(", ")} | ${p.inStock ? "In Stock" : "Out of Stock"}${p.badge ? ` | ${p.badge}` : ""}`
+    `- ${p.name} (${p.collection}) | PKR ${p.price.toLocaleString()} | Sizes: ${Array.isArray(p.sizes) ? p.sizes.join(", ") : p.sizes} | Colors: ${Array.isArray(p.colors) ? p.colors.join(", ") : p.colors} | ${p.inStock ? "In Stock" : "Out of Stock"}${p.badge ? ` | ${p.badge}` : ""}`
   );
   const label = filters.maxPrice ? ` strictly under PKR ${filters.maxPrice.toLocaleString()}` : "";
   return `LINOIR PRODUCT CATALOG${label} (${filtered.length} products):\n${lines.join("\n")}${filters.maxPrice ? "\n\nIMPORTANT: Only list the products shown above." : ""}`;
+}
+
+function buildFullProductContext(filters = {}) {
+  return buildContextFromProducts(seedProducts, filters);
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -183,6 +226,15 @@ async function callGroq(messages) {
   return (await response.json()).choices[0].message.content.trim();
 }
 
+// ── Admin auth middleware ──────────────────────────────────────────────────────
+function adminAuth(req, res, next) {
+  const secret = req.headers["x-admin-secret"];
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
+
 // ── POST /api/chat ────────────────────────────────────────────────────────────
 app.post("/api/chat", async (req, res) => {
   const { message, history = [] } = req.body;
@@ -208,12 +260,17 @@ app.post("/api/chat", async (req, res) => {
 
     if (priceMatch) {
       const maxPrice = parseInt((priceMatch[1] || priceMatch[2] || priceMatch[3]).replace(/,/g, ""));
-      productContext = buildFullProductContext({ maxPrice });
+      const products = await getProductsFromDB();
+      productContext = buildContextFromProducts(products, { maxPrice });
     } else if (JINA_API_KEY && PINECONE_API_KEY) {
       productContext = await searchProducts(message);
-      if (!productContext) productContext = buildFullProductContext();
+      if (!productContext) {
+        const products = await getProductsFromDB();
+        productContext = buildContextFromProducts(products);
+      }
     } else {
-      productContext = buildFullProductContext();
+      const products = await getProductsFromDB();
+      productContext = buildContextFromProducts(products);
     }
 
     const systemPrompt = buildSystemPrompt(productContext) + orderContext;
@@ -246,6 +303,145 @@ app.post("/api/orders", async (req, res) => {
   }
 });
 
+// ── ADMIN: GET /api/admin/orders ──────────────────────────────────────────────
+app.get("/api/admin/orders", adminAuth, async (req, res) => {
+  try {
+    const db = await getDB();
+    const orders = await db.collection("orders")
+      .find({})
+      .sort({ savedAt: -1 })
+      .toArray();
+    res.json({ orders });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN: PATCH /api/admin/orders/:id ───────────────────────────────────────
+app.patch("/api/admin/orders/:id", adminAuth, async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  const validStatuses = ["Confirmed", "Processing", "Shipped", "Delivered", "Cancelled"];
+  if (!validStatuses.includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+  try {
+    const db = await getDB();
+    await db.collection("orders").updateOne(
+      { id: id.toUpperCase() },
+      { $set: { status, updatedAt: new Date() } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN: GET /api/admin/products ────────────────────────────────────────────
+app.get("/api/admin/products", adminAuth, async (req, res) => {
+  try {
+    const db = await getDB();
+    let products = await db.collection("products").find({}).toArray();
+    // If DB is empty, return seed products
+    if (products.length === 0) products = seedProducts;
+    res.json({ products });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN: POST /api/admin/products ──────────────────────────────────────────
+app.post("/api/admin/products", adminAuth, async (req, res) => {
+  const product = req.body;
+  if (!product || !product.id || !product.name) {
+    return res.status(400).json({ error: "Product id and name are required" });
+  }
+  try {
+    const db = await getDB();
+    await db.collection("products").updateOne(
+      { id: product.id },
+      { $set: { ...product, updatedAt: new Date() } },
+      { upsert: true }
+    );
+    // Auto re-embed to Pinecone
+    await embedProduct(product);
+    res.json({ success: true, id: product.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN: DELETE /api/admin/products/:id ────────────────────────────────────
+app.delete("/api/admin/products/:id", adminAuth, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const db = await getDB();
+    await db.collection("products").deleteOne({ id });
+    // Remove from Pinecone
+    const index = getPineconeIndex();
+    await index.deleteOne(id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN: POST /api/admin/import ─────────────────────────────────────────────
+// One-time import of products.json into MongoDB + Pinecone
+app.post("/api/admin/import", adminAuth, async (req, res) => {
+  try {
+    const db = await getDB();
+    const collection = db.collection("products");
+
+    res.setHeader("Content-Type", "text/plain");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.write("Importing products from catalog...\n\n");
+
+    for (const product of seedProducts) {
+      await collection.updateOne(
+        { id: product.id },
+        { $set: { ...product, updatedAt: new Date() } },
+        { upsert: true }
+      );
+      await embedProduct(product);
+      res.write(`✅ ${product.name}\n`);
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    res.write(`\n✅ Imported ${seedProducts.length} products to MongoDB and Pinecone!\n`);
+    res.end();
+  } catch (err) {
+    res.write(`\n❌ Error: ${err.message}\n`);
+    res.end();
+  }
+});
+
+// ── ADMIN: GET /api/admin/stats ───────────────────────────────────────────────
+app.get("/api/admin/stats", adminAuth, async (req, res) => {
+  try {
+    const db = await getDB();
+    const orders = await db.collection("orders").find({}).toArray();
+    const products = await db.collection("products").countDocuments();
+
+    const totalOrders = orders.length;
+    const totalRevenue = orders.reduce((sum, o) => sum + (o.total || 0), 0);
+    const pending = orders.filter(o => o.status === "Confirmed" || o.status === "Processing").length;
+    const shipped = orders.filter(o => o.status === "Shipped").length;
+    const delivered = orders.filter(o => o.status === "Delivered").length;
+
+    res.json({
+      totalOrders,
+      totalRevenue,
+      pending,
+      shipped,
+      delivered,
+      totalProducts: products || seedProducts.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/health ───────────────────────────────────────────────────────────
 app.get("/api/health", async (_, res) => {
   let mongoStatus = "disconnected";
@@ -270,7 +466,7 @@ app.get("/api/embed", async (req, res) => {
     res.setHeader("Transfer-Encoding", "chunked");
     res.write("Starting product embedding with Jina AI...\n\n");
 
-    for (const product of products) {
+    for (const product of seedProducts) {
       const text = `Product: ${product.name}\nCollection: ${product.collection}\nPrice: PKR ${product.price}\nDescription: ${product.description}\nSizes: ${product.sizes.join(", ")}\nColors: ${product.colors.join(", ")}\nStatus: ${product.inStock ? "In Stock" : "Out of Stock"}${product.badge ? `\nBadge: ${product.badge}` : ""}`;
       try {
         const embedding = await embedText(text);
