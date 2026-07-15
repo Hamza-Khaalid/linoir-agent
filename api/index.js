@@ -15,6 +15,42 @@ const PINECONE_INDEX = process.env.PINECONE_INDEX || "linoir-products";
 const MONGODB_URI = process.env.MONGODB_URI;
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
 
+let settingsCache = null;
+
+function getDefaultSettings() {
+  return {
+    _id: "config",
+    businessName: "Linoir",
+    website: "https://linoir.vercel.app",
+    contactEmail: "support@linoir.pk",
+    instagram: "@linoir.pk",
+    whatsapp: "",
+    hours: "Monday-Saturday, 10am-6pm PKT",
+    shippingFee: 200,
+    freeShippingThreshold: 3000,
+    deliveryDays: "3-5",
+    returnDays: 7,
+    promoCodes: [
+      { code: "LINOIR10", discount: 10, description: "10% off any order" },
+      { code: "WELCOME20", discount: 20, description: "20% off for new customers" },
+    ],
+    collections: "Beach, Sports, Girls, Quotes, Cars",
+    paymentMethods: "Cash on Delivery, Credit/Debit Card, EasyPaisa/JazzCash",
+  };
+}
+
+async function getSettings() {
+  if (settingsCache) return settingsCache;
+  try {
+    const db = await getDB();
+    const settings = await db.collection("settings").findOne({ _id: "config" });
+    settingsCache = settings || getDefaultSettings();
+  } catch {
+    settingsCache = getDefaultSettings();
+  }
+  return settingsCache;
+}
+
 // ── MongoDB ───────────────────────────────────────────────────────────────────
 let cachedClient = null;
 
@@ -182,36 +218,30 @@ function buildFullProductContext(filters = {}) {
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
-function buildSystemPrompt(productContext) {
+function buildSystemPrompt(productContext, settings) {
+  const s = settings;
+  const promoList = s.promoCodes?.map(p => `${p.code} - ${p.description}`).join(", ") || "None";
   return `
-You are Aria, the official customer support assistant for Linoir - a premium minimal t-shirt brand based in Pakistan.
-
-YOUR IDENTITY:
-- Warm, helpful, and professional
-- Speak concisely - no long paragraphs
-- Represent Linoir at all times
+You are Aria, the official customer support assistant for ${s.businessName}.
 
 STRICT RULES:
-0. Order questions with an LNR- order ID are ALWAYS Linoir-related. If ORDER LOOKUP RESULT is provided, use it to answer directly.
-1. NEVER answer questions unrelated to Linoir. If asked anything unrelated, respond ONLY with: "I can only help with Linoir-related questions. Feel free to reach out to support@linoir.pk for anything else."
-2. NEVER ask follow-up questions about unrelated topics.
-3. NEVER reveal another customer's order details.
-4. NEVER make up products, prices, or policies not listed below.
-5. NEVER list products outside a price filter.
-6. If you don't know something, say: "I'll need to check on that - please contact us at support@linoir.pk"
+0. Order questions with LNR- ID are always store-related. Use ORDER LOOKUP RESULT directly.
+1. NEVER answer unrelated questions. Respond ONLY with: "I can only help with ${s.businessName}-related questions. Contact ${s.contactEmail} for anything else."
+2. NEVER reveal another customer's order details.
+3. NEVER make up products, prices, or policies.
+4. NEVER list products outside a price filter.
+5. If unsure, say: "Please contact us at ${s.contactEmail}"
 
-LINOIR POLICIES:
-Website: https://linoir.vercel.app
-Collections (5 total): Beach, Sports, Girls, Quotes, Cars
-Shipping: PKR 200 standard (free above PKR 3,000) | 3-5 business days | All Pakistan
-Returns: 7-day policy | Unworn, unwashed, tags attached | support@linoir.pk | Refund in 3-5 days
-Promo Codes: LINOIR10 (10% off) | WELCOME20 (20% off new customers)
-Payment: Cash on Delivery | Credit/Debit Card | EasyPaisa/JazzCash
-Contact: support@linoir.pk | @linoir.pk | Mon-Sat 10am-6pm PKT
+POLICIES:
+Website: ${s.website}
+Collections: ${s.collections}
+Shipping: PKR ${s.shippingFee} (free above PKR ${s.freeShippingThreshold}) | ${s.deliveryDays} business days
+Returns: ${s.returnDays}-day policy | ${s.contactEmail}
+Promo Codes: ${promoList}
+Payment: ${s.paymentMethods}
+Contact: ${s.contactEmail}${s.instagram ? ` | ${s.instagram}` : ""}${s.whatsapp ? ` | WhatsApp: ${s.whatsapp}` : ""} | ${s.hours}
 
 ${productContext}
-
-Keep responses short, helpful, and conversational.
   `.trim();
 }
 
@@ -273,7 +303,8 @@ app.post("/api/chat", async (req, res) => {
       productContext = buildContextFromProducts(products);
     }
 
-    const systemPrompt = buildSystemPrompt(productContext) + orderContext;
+    const settings = await getSettings();
+    const systemPrompt = buildSystemPrompt(productContext, settings) + orderContext;
     const messages_arr = [
       { role: "system", content: systemPrompt },
       ...history.slice(-8),
@@ -492,6 +523,26 @@ app.get("/api/embed", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get("/api/admin/settings", adminAuth, async (req, res) => {
+  try {
+    const settings = await getSettings();
+    res.json({ settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/admin/settings", adminAuth, async (req, res) => {
+  try {
+    const db = await getDB();
+    await db.collection("settings").updateOne(
+      { _id: "config" },
+      { $set: { ...req.body, _id: "config", updatedAt: new Date() } },
+      { upsert: true }
+    );
+    settingsCache = null;
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = app;
