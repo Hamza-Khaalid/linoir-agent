@@ -43,7 +43,7 @@ async function getSettings() {
   if (settingsCache) return settingsCache;
   try {
     const db = await getDB();
-    const settings = await db.collection("settings").findOne({ _id: "config" });
+    const settings = await db.collection("settings").findOne({});
     settingsCache = settings || getDefaultSettings();
   } catch {
     settingsCache = getDefaultSettings();
